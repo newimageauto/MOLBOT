@@ -1,48 +1,32 @@
-FROM node:22-bookworm
+FROM dorowu/ubuntu-desktop-lxde-vnc:focal
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN corepack enable
+RUN apt-get update && apt-get install -y \
+  python3.10 \
+  python3.10-venv \
+  python3-pip \
+  curl \
+  wget \
+  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+RUN python3.10 -m venv /opt/molbot-env
+ENV PATH="/opt/molbot-env/bin:$PATH"
 
-ARG OPENCLAW_DOCKER_APT_PACKAGES=""
-RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
+RUN pip install --upgrade pip && \
+  pip install supabase openai playwright
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY ui/package.json ./ui/package.json
-COPY patches ./patches
-COPY scripts ./scripts
+RUN playwright install chromium && \
+  playwright install-deps chromium
 
-RUN pnpm install --frozen-lockfile
+WORKDIR /home/ubuntu
+RUN mkdir -p /home/ubuntu/molbot
 
-COPY . .
-RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
-# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
-ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:build
+ENV HTTP_PASSWORD=""
 
-ENV NODE_ENV=production
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# Allow non-root user to write temp files during runtime/tests.
-RUN chown -R node:node /app
+EXPOSE 80 5900
 
-# Security hardening: Run as non-root user
-# The node:22-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-USER node
-
-# Start gateway server with default config.
-# Binds to loopback (127.0.0.1) by default for security.
-#
-# For container platforms requiring external health checks:
-#   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
-#   2. Override CMD: ["node","openclaw.mjs","gateway","--allow-unconfigured","--bind","lan"]
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+ENTRYPOINT ["/entrypoint.sh"]
